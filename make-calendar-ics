@@ -1,0 +1,358 @@
+#!/usr/bin/perl
+#
+# Take simple descriptions of calendar events and transform them into an ICS
+# file that can be imported by various calendar applications.
+#
+# The simple descriptions look like this:
+#
+#   date time duration reminder subject
+#
+# Example:
+#
+#   04/09/2011 11:30am 1hr 15min Jenna's soccer
+#
+# One event per line.  In this example, 1hr is the duration and 15min is the
+# reminder.
+#
+# The duration and reminder can be any of these forms:
+#
+#   15min 15m 15mins
+#   1hr   1h  2hrs
+#   1day  1d  2days
+#   0
+#
+# Use "-" for no reminder.
+#
+# For all-day events, replace the time and duration fields with "-":
+#
+#   4/9/2011 - - 15min No school
+#
+# Dates are in the form mm/dd/yyyy.  If the year is specified it must be four
+# digits.  If the year is not specified, the year from the previous line is
+# used or the current year if there is no previous line.  If a given event
+# recurs over several days, you may specify only the dates for the 2nd and
+# subsequent occurrences.
+#
+# Example:
+#
+#   5/24/2012 9am 1hr 15min Status
+#   5/31
+#   6/7
+#   6/14
+#
+# Times are in the form hh:mmap.  hh is one or two digits.  mm must be two
+# digits if present.  If ":mm" is missing it is assumed to be ":00".  "ap" can
+# be any of: AM, PM, A, P (caseless).
+#
+
+# This software is distributed under the "Simplified BSD license":
+#
+# Copyright Michael Cook <michael@waxrat.com>. All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+#    1. Redistributions of source code must retain the above copyright notice,
+#       this list of conditions and the following disclaimer.
+#
+#    2. Redistributions in binary form must reproduce the above copyright
+#       notice, this list of conditions and the following disclaimer in the
+#       documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY MICHAEL COOK ''AS IS'' AND ANY EXPRESS OR
+# IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+# MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO
+# EVENT SHALL MICHAEL COOK OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
+# INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+# (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+# LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+# ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+# THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#
+# The views and conclusions contained in the software and documentation are
+# those of the authors and should not be interpreted as representing official
+# policies, either expressed or implied, of Michael Cook.
+
+use strict;
+use warnings;
+use Getopt::Long;
+use Time::Local;
+use Date::ICal;			# apt: libdate-ical-perl
+use Digest::MD5 qw(md5_hex);
+
+my ($THIS) = $0 =~ m%([^/]+)$%;
+my $USAGE = "usage: $THIS [files]\n";
+
+my $DEBUG;
+
+Getopt::Long::config("bundling");
+GetOptions("debug!" => \$DEBUG)
+    or die $USAGE;
+
+my $YEAR;
+sub this_year
+{
+    return (localtime)[5] + 1900;
+}
+
+sub parse_date
+{
+    # Returns (year, month, day).
+    # Year is 4 digits.
+    local $_ = shift;
+
+    return ($YEAR = $3, $1, $2)
+	if m%^(\d\d?)/(\d\d?)/(\d\d\d\d)$%;
+
+    # If "mm/dd" then use the year from the previous line, or the current
+    # year.
+    return ($YEAR //= this_year, $1, $2)
+	if m%^(\d\d?)/(\d\d?)$%;
+
+    return undef;
+}
+
+sub make_hm
+{
+    my ($h, $m, $ap) = @_;
+
+    $h >= 1 && $h <= 12 or die $h;
+    $m >= 0 && $m < 60 or die $m;
+    my $pm = lc($ap) eq "p";
+    if ($h == 12)
+    {
+	# 12am => 0, 12pm => 12
+	$h = 0
+	    unless $pm;
+    }
+    else
+    {
+	$h += 12
+	    if $pm;
+    }
+    return ($h, $m);
+}
+
+sub parse_time
+{
+    # Returns (hour, minute).
+    # Hour is 0-23.
+    local $_ = shift;
+
+    # 9:00am 9:00a
+    if (my ($h, $m, $ap) = m%^(\d\d?):(\d\d)\s*([ap])m$%i)
+    {
+	return make_hm($h, $m, $ap);
+    }
+    # 9am 9a
+    if (my ($h, $ap) = m%^(\d\d?)\s*([ap])m$%i)
+    {
+	return make_hm($h, 0, $ap);
+    }
+    return undef;
+}
+
+sub parse_duration
+{
+    # Returns number of minutes.
+    local $_ = shift;
+
+    return int($1)
+	if m%^(\d+\.?\d*)(m|mins?)$%i;
+    return int($1 * 60)
+	if m%^(\d+\.?\d*)(h|hrs?)$%i;
+    return int($1 * 60 * 24)
+	if m%^(\d+\.?\d*)(d|days?)$%i;
+    return 0
+	if $_ eq 0;
+    return undef;
+}
+
+sub date_time
+{
+    my ($epoch) = @_;
+    return Date::ICal->new(epoch => $epoch)->ical;
+}
+
+sub date_only
+{
+    my ($epoch) = @_;
+    local $_ = date_time($epoch);
+    # e.g., "19971024T120000"
+    s/T.*//;
+    return $_;
+}
+
+my $now = date_time(time);
+warn "> now '$now'\n" if $DEBUG;
+
+my $out = <<EOF;
+BEGIN:VCALENDAR
+PRODID:-//Mozilla.org/NONSGML Mozilla Calendar V1.1//EN
+VERSION:2.0
+
+BEGIN:VTIMEZONE
+TZID:America/New_York
+X-LIC-LOCATION:America/New_York
+BEGIN:DAYLIGHT
+TZOFFSETFROM:-0500
+TZOFFSETTO:-0400
+TZNAME:EDT
+DTSTART:19700308T020000
+RRULE:FREQ=YEARLY;BYDAY=2SU;BYMONTH=3
+END:DAYLIGHT
+BEGIN:STANDARD
+TZOFFSETFROM:-0400
+TZOFFSETTO:-0500
+TZNAME:EST
+DTSTART:19701101T020000
+RRULE:FREQ=YEARLY;BYDAY=1SU;BYMONTH=11
+END:STANDARD
+END:VTIMEZONE
+EOF
+
+my $exit = 0;
+my $num_events = 0;
+for my $arg (@ARGV)
+{
+    my $fh;
+    unless (open my $fh, $arg)
+    {
+	warn "open $arg: $!";
+	$exit = 1;
+	next;
+    }
+
+    my @last_match;
+    while (<>)
+    {
+	s/\r?\n//;
+	warn "> line '$_'\n" if $DEBUG;
+	next unless /\S/;
+
+	my @match = /^(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(.+)$/x;
+	if (! @match && @last_match)
+	{
+	    my ($year, $month, $day) = parse_date $_;
+	    if (defined $year)
+	    {
+		@match = @last_match;
+		$match[0] = "$month/$day/$year";
+	    }
+	}
+	unless (@match)
+	{
+	    warn "malformed line '$_' at $arg line $.\n";
+	    $exit = 1;
+	    next;
+	}
+	my ($date, $time, $dur, $rem, $subject) = @match;
+	@last_match = @match;
+
+	my ($year, $month, $day) = parse_date($date);
+	unless (defined $year)
+	{
+	    warn "malformed date '$date' at $arg line $.\n";
+	    $exit = 1;
+	    next;
+	}
+
+	my ($allday, $hour, $minute, $dur_mins);
+	if ($time eq "-" && $dur eq "-")
+	{
+	    $allday = 1;
+	    $hour = $minute = 0;
+	    $dur_mins = 24 * 60;
+	}
+	else
+	{
+	    $allday = 0;
+	    ($hour, $minute) = parse_time($time);
+	    unless (defined $hour)
+	    {
+		warn "malformed time '$time' at $arg line $.\n";
+		$exit = 1;
+		next;
+	    }
+	    $dur_mins = parse_duration($dur);
+	    unless (defined $dur_mins)
+	    {
+		warn "malformed duration '$dur' at $arg line $.\n";
+		$exit = 1;
+		next;
+	    }
+	}
+	warn "> event: $year-$month-$day $hour:$minute $dur_mins\n" if $DEBUG;
+
+	my $rem_mins;
+	if ($rem ne "-")
+	{
+	    $rem_mins = parse_duration($rem);
+	    unless (defined $rem_mins)
+	    {
+		warn "malformed reminder '$rem' at $arg line $.\n";
+		$exit = 1;
+		next;
+	    }
+	}
+
+	warn sprintf("%04d-%02d-%02d %02d:%02d %3sm %4s \"%s\"\n",
+		     $year, $month, $day,
+		     $hour, $minute,
+		     $dur_mins,
+		     defined($rem_mins) ? "${rem_mins}m" : "- ",
+		     $subject);
+	++$num_events;
+
+	my $start = timelocal(0, $minute, $hour, $day, $month - 1, $year);
+	my $end = $start + $dur_mins * 60;
+
+	my @a;
+	push @a, "";
+	push @a, "BEGIN:VEVENT";
+	push @a, "CREATED:$now";
+	push @a, "LAST-MODIFIED:$now";
+	push @a, "DTSTAMP:$now";
+
+	my @b;
+	push @b, "SUMMARY:$subject";
+
+	if ($allday)
+	{
+	    push @b, "DTSTART;VALUE=DATE:" . date_only($start);
+	    push @b, "DTEND;VALUE=DATE:" . date_only($end);
+	}
+	else
+	{
+	    push @b, "DTSTART:" . date_time($start);
+	    push @b, "DTEND:" . date_time($end);
+	}
+
+	if ($rem ne "-")
+	{
+	    push @b, "BEGIN:VALARM";
+	    push @b, "ACTION:DISPLAY";
+	    push @b, "TRIGGER;VALUE=DURATION:-PT${rem_mins}M";
+	    push @b, "DESCRIPTION:Default Mozilla Description";
+	    push @b, "END:VALARM";
+	}
+	push @b, "END:VEVENT";
+
+	my $uid = md5_hex(join "\n", @a, @b);
+	warn "> uid $uid\n" if $DEBUG;
+
+	$out .= "$_\n"
+	    for @a, "UID:$uid", @b;
+    }
+}
+
+$out .= "\nEND:VCALENDAR\n";
+
+exit $exit
+    if $exit;
+
+$out =~ s/\n/\r\n/g;
+print $out;
+
+warn "$num_events event", $num_events == 1 ? "" : "s", ".\n";

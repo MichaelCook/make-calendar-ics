@@ -40,9 +40,16 @@
 #   6/7
 #   6/14
 #
+# The following date forms are also accepted:
+#   2015-June-23
+#   2015-Jun-23
+#
 # Times are in the form hh:mmap.  hh is one or two digits.  mm must be two
 # digits if present.  If ":mm" is missing it is assumed to be ":00".  "ap" can
 # be any of: AM, PM, A, P (caseless).
+#
+# You can set the DESCRIPTION field with a line that starts with ">".  Setting
+# the DESCRIPTION field affects all events that follow that line.
 #
 
 # This software is distributed under the "Simplified BSD license":
@@ -82,7 +89,7 @@ use Date::ICal;			# apt: libdate-ical-perl
 use Digest::MD5 qw(md5_hex);
 
 my ($THIS) = $0 =~ m%([^/]+)$%;
-my $USAGE = "usage: $THIS [files]\n";
+my $USAGE = "usage: $THIS files\n";
 
 my $DEBUG;
 
@@ -90,10 +97,24 @@ Getopt::Long::config("bundling");
 GetOptions("debug!" => \$DEBUG)
     or die $USAGE;
 
+@ARGV or die "expected at least one file name argument";
+
 my $YEAR;
 sub this_year
 {
     return (localtime)[5] + 1900;
+}
+
+my %MONTH_NAME_TO_NUMBER;
+{
+    my @names = qw(january february march     april   may      june
+                   july    august   september october november december);
+    my $n = 1;
+    for my $m (@names) {
+	$MONTH_NAME_TO_NUMBER{$m} = $n;
+	$MONTH_NAME_TO_NUMBER{substr($m, 0, 3)} = $n;
+	++$n;
+    }
 }
 
 sub parse_date
@@ -109,6 +130,13 @@ sub parse_date
     # year.
     return ($YEAR //= this_year, $1, $2)
 	if m%^(\d\d?)/(\d\d?)$%;
+
+    my ($year, $month, $day) = m%^(\d\d\d\d)-([a-z]+)-(\d+)$%i;
+    if ($month) {
+	$month = $MONTH_NAME_TO_NUMBER{lc $month};
+	return $year, $month, $day
+	    if $month;
+    }
 
     return undef;
 }
@@ -214,6 +242,7 @@ EOF
 
 my $exit = 0;
 my $num_events = 0;
+my $description;
 for my $arg (@ARGV)
 {
     my $fh;
@@ -230,6 +259,13 @@ for my $arg (@ARGV)
 	s/\r?\n//;
 	warn "> line '$_'\n" if $DEBUG;
 	next unless /\S/;
+
+	if (/^>\s*(.*)/)
+	{
+	    $description = $1;
+	    warn "> description '$description'\n" if $DEBUG;
+	    next;
+	}
 
 	my @match = /^(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(.+)$/x;
 	if (! @match && @last_match)
@@ -317,6 +353,8 @@ for my $arg (@ARGV)
 
 	my @b;
 	push @b, "SUMMARY:$subject";
+	push @b, "DESCRIPTION:$description"
+	    if defined $description;
 
 	if ($allday)
 	{
@@ -334,7 +372,6 @@ for my $arg (@ARGV)
 	    push @b, "BEGIN:VALARM";
 	    push @b, "ACTION:DISPLAY";
 	    push @b, "TRIGGER;VALUE=DURATION:-PT${rem_mins}M";
-	    push @b, "DESCRIPTION:Default Mozilla Description";
 	    push @b, "END:VALARM";
 	}
 	push @b, "END:VEVENT";

@@ -66,20 +66,16 @@
 #       notice, this list of conditions and the following disclaimer in the
 #       documentation and/or other materials provided with the distribution.
 #
-# THIS SOFTWARE IS PROVIDED BY MICHAEL COOK ''AS IS'' AND ANY EXPRESS OR
-# IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
-# MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO
-# EVENT SHALL MICHAEL COOK OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
-# INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
-# (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-# LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
-# ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
-# THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-#
-# The views and conclusions contained in the software and documentation are
-# those of the authors and should not be interpreted as representing official
-# policies, either expressed or implied, of Michael Cook.
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 use strict;
 use warnings;
@@ -123,8 +119,29 @@ sub parse_date
     # Year is 4 digits.
     local $_ = shift;
 
+    # mm/dd/yyyy
     return ($YEAR = $3, $1, $2)
 	if m%^(\d\d?)/(\d\d?)/(\d\d\d\d)$%;
+
+    # mm-dd-yyyy
+    return ($YEAR = $3, $1, $2)
+	if m%^(\d\d?)-(\d\d?)-(\d\d\d\d)$%;
+
+    # yyyy/mm/dd
+    return ($YEAR = $1, $2, $3)
+	if m%^(\d\d\d\d)/(\d\d?)/(\d\d?)$%;
+
+    # yyyy-mm-dd
+    return ($YEAR = $1, $2, $3)
+	if m%^(\d\d\d\d)-(\d\d?)-(\d\d?)$%;
+
+    # January-2-2017
+    if (m%^([a-z]{3,})-(\d+)-(\d\d\d\d)$%i)
+    {
+        my $month = $MONTH_NAME_TO_NUMBER{lc $1};
+        return ($YEAR = $3, $month, $2)
+            if $month;
+    }
 
     # If "mm/dd" then use the year from the previous line, or the current
     # year.
@@ -134,7 +151,7 @@ sub parse_date
     my ($year, $month, $day) = m%^(\d\d\d\d)-([a-z]+)-(\d+)$%i;
     if ($month) {
 	$month = $MONTH_NAME_TO_NUMBER{lc $month};
-	return $year, $month, $day
+	return $YEAR = $year, $month, $day
 	    if $month;
     }
 

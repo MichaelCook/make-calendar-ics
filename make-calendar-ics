@@ -81,7 +81,7 @@ use strict;
 use warnings;
 use Getopt::Long;
 use Time::Local;
-use Date::ICal;			# apt: libdate-ical-perl
+use Date::ICal;
 use Digest::MD5 qw(md5_hex);
 
 my ($THIS) = $0 =~ m%([^/]+)$%;
